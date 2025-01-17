@@ -3,4 +3,7 @@ dist
 node_modules
 .vscode/
 .vscode-test/
+.vscodeignore
 *.vsix
+vsc-extension-quickstart.md
+eslint.config.mjs
