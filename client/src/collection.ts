@@ -2,6 +2,8 @@ import fs = require("fs");
 import path = require("path");
 import crypto = require("crypto");
 import AdmZip = require("adm-zip");
+import { spawn } from "child_process";
+
 import {
   workspace,
   ExtensionContext,
@@ -12,10 +14,56 @@ import {
   Range,
   Position,
 } from "vscode";
+import { cwd } from "process";
 
 export const CHANGES_NAME = ".changes";
 export const CONCRETE_NAME = "concrete-history"; // ASSUMPTION: A file being edited must first exist on disk.
 export const EDITS_NAME = "edits-history";
+
+export function upload(): void {
+  const ancestorPaths = getAncestorPaths();
+  if (ancestorPaths.length !== 1) {
+    console.error("There should be exactly one ancestor path");
+    return;
+  }
+  const changesLoc = path.join(ancestorPaths[0], "changes.zip");
+  console.log(`Current working directory: ${process.cwd()}`);
+
+  if (fs.existsSync(changesLoc)) {
+    const add = spawn("git", ["add", changesLoc], { cwd: ancestorPaths[0] });
+    add.on("close", (code) => {
+      console.log(`git add process exited with code ${code}`);
+      if (code === 0) {
+        const commit = spawn("git", ["commit", "-m", "new changes"], {
+          cwd: ancestorPaths[0],
+        });
+        commit.on("close", (code) => {
+          console.log(`git commit process exited with code ${code}`);
+          if (code === 0) {
+            const push = spawn("git", ["push", "-u", "origin", "main"], {
+              cwd: ancestorPaths[0],
+            });
+            push.on("close", (code) => {
+              console.log(`git push process exited with code ${code}`);
+            });
+            push.stderr.on("data", (data) => {
+              console.error(`git push stderr: ${data}`);
+            });
+          } else {
+            console.error("COMMIT FAILED");
+          }
+        });
+        commit.stderr.on("data", (data) => {
+          console.error(`git commit stderr: ${data}`);
+        });
+      } else {
+        console.error("ADD FAILED");
+      }
+    });
+  } else {
+    console.error(`File ${changesLoc} does not exist.`);
+  }
+}
 
 export function zipChanges(): void {
   const ancestorPaths = getAncestorPaths();

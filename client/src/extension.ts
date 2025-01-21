@@ -17,6 +17,7 @@ import {
   logChange,
   updateConcreteCheckpoints,
   zipChanges,
+  upload,
 } from "./collection";
 import { Dropbox, Error, files } from "dropbox";
 
@@ -26,6 +27,7 @@ export function activate(context: ExtensionContext) {
   const disposable = workspace.onDidSaveTextDocument((document) => {
     console.log("Document saved: ", document.fileName);
     zipChanges();
+    upload();
     updateConcreteCheckpoints();
   });
 
