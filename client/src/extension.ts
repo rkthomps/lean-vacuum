@@ -19,16 +19,21 @@ import {
   zipChanges,
   upload,
 } from "./collection";
-import { Dropbox, Error, files } from "dropbox";
+
+import { VacuumConfig, Language, load_config } from "./config";
 
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext) {
+  const config = load_config();
+
   const disposable = workspace.onDidSaveTextDocument((document) => {
     console.log("Document saved: ", document.fileName);
     zipChanges();
-    upload();
-    updateConcreteCheckpoints();
+    if (config.pushOnSave) {
+      upload();
+    }
+    updateConcreteCheckpoints(config);
   });
 
   context.subscriptions.push(disposable);
@@ -50,7 +55,7 @@ export function activate(context: ExtensionContext) {
 
   const customMiddleware = {
     didChange: (e: TextDocumentChangeEvent): Promise<void> => {
-      logChange(e);
+      logChange(e, config);
       return new Promise((resolve, reject) => {});
     },
   };

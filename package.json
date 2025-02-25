@@ -17,24 +17,21 @@
   "contributes": {
     "configuration": {
       "type": "object",
-      "title": "Example configuration",
+      "title": "Lean Vacuum configuration",
       "properties": {
-        "languageServerExample.maxNumberOfProblems": {
-          "scope": "resource",
-          "type": "number",
-          "default": 100,
-          "description": "Controls the maximum number of problems produced by the server."
-        },
-        "languageServerExample.trace.server": {
-          "scope": "window",
+        "language": {
           "type": "string",
           "enum": [
-            "off",
-            "messages",
-            "verbose"
+            "lean4",
+            "coq"
           ],
-          "default": "off",
-          "description": "Traces the communication between VS Code and the language server."
+          "default": "lean4",
+          "description": "For which langauge should this extension collect data."
+        },
+        "pushOnSave": {
+          "type": "boolean",
+          "default": false,
+          "desctiption": "Whether this extension pushes to the remote git repo when a file is saved."
         }
       }
     }

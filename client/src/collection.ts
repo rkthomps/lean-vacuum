@@ -3,6 +3,7 @@ import path = require("path");
 import crypto = require("crypto");
 import AdmZip = require("adm-zip");
 import { spawn } from "child_process";
+import { Language, VacuumConfig } from "./config";
 
 import {
   workspace,
@@ -15,6 +16,7 @@ import {
   Position,
 } from "vscode";
 import { cwd } from "process";
+import { dir } from "console";
 
 export const CHANGES_NAME = ".changes";
 export const CONCRETE_NAME = "concrete-history"; // ASSUMPTION: A file being edited must first exist on disk.
@@ -351,15 +353,28 @@ function walkDir(
   return allChildren;
 }
 
-function isEssentialDir(dir: string): boolean {
-  const notLakeDir = !dir.endsWith(".lake");
-  const notGitDir = !dir.endsWith(".git");
-  const notChangesDir = !dir.endsWith(CHANGES_NAME);
-  return notLakeDir && notGitDir && notChangesDir;
+// TODO: Change to do for Coq as well
+function isEssentialDir(dir: string, c: VacuumConfig): boolean {
+  switch (c.language) {
+    case Language.Lean4:
+      const notLakeDir = !dir.endsWith(".lake");
+      const notGitDir = !dir.endsWith(".git");
+      const notChangesDir = !dir.endsWith(CHANGES_NAME);
+      return notLakeDir && notGitDir && notChangesDir;
+    case Language.Coq:
+      const notCoqGitDir = !dir.endsWith(".git");
+      const notCoqChangesDir = !dir.endsWith(CHANGES_NAME);
+      return notCoqGitDir && notCoqChangesDir;
+  }
 }
 
-function isEssentialFile(file: string): boolean {
-  return file.endsWith(".lean") || file.endsWith("lean-toolchain");
+function isEssentialFile(file: string, c: VacuumConfig): boolean {
+  switch (c.language) {
+    case Language.Lean4:
+      return file.endsWith(".lean") || file.endsWith("lean-toolchain");
+    case Language.Coq:
+      return file.endsWith(".v") || file.endsWith("_CoqProject");
+  }
 }
 
 function isSubpath(p1: string, p2: string) {
@@ -450,8 +465,10 @@ function createConcreteCheckpoint(
   return newCandidateCheckpoint;
 }
 
-function updateWorkspaceConcreteCheckpoints(p: string) {
-  const files = walkDir(p, isEssentialFile, isEssentialDir);
+function updateWorkspaceConcreteCheckpoints(p: string, c: VacuumConfig) {
+  const fileFilter = (file: string) => isEssentialFile(file, c);
+  const dirFilter = (dir: string) => isEssentialDir(dir, c);
+  const files = walkDir(p, fileFilter, dirFilter);
   for (let f of files) {
     const fileStat = fs.lstatSync(f);
     const saveLoc = path.join(
@@ -483,16 +500,19 @@ function updateWorkspaceConcreteCheckpoints(p: string) {
   }
 }
 
-export function updateConcreteCheckpoints() {
+export function updateConcreteCheckpoints(c: VacuumConfig) {
   const ancestorPaths = getAncestorPaths();
   for (let p of ancestorPaths) {
-    updateWorkspaceConcreteCheckpoints(p);
+    updateWorkspaceConcreteCheckpoints(p, c);
   }
 }
 
-export function logChange(change: TextDocumentChangeEvent): void {
+export function logChange(
+  change: TextDocumentChangeEvent,
+  c: VacuumConfig
+): void {
   console.log("LOGGING CHANGE");
-  updateConcreteCheckpoints();
+  updateConcreteCheckpoints(c);
   const time = new Date();
   const changePath = getChangePath(change.document.uri.fsPath);
   if (changePath === null) {
