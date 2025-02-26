@@ -369,6 +369,7 @@ function isEssentialDir(dir: string, c: VacuumConfig): boolean {
 }
 
 function isEssentialFile(file: string, c: VacuumConfig): boolean {
+  console.log(c.language);
   switch (c.language) {
     case Language.Lean4:
       return file.endsWith(".lean") || file.endsWith("lean-toolchain");

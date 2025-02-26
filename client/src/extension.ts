@@ -21,15 +21,24 @@ import {
 } from "./collection";
 
 import { VacuumConfig, Language, load_config } from "./config";
+import { get } from "http";
 
 let client: LanguageClient;
 
-export function activate(context: ExtensionContext) {
+function getLanguageStr(): string {
   const config = load_config();
+  switch (config.language) {
+    case Language.Lean4:
+      return "lean4";
+    case Language.Coq:
+      return "coq";
+  }
+}
 
+export function activate(context: ExtensionContext) {
   const disposable = workspace.onDidSaveTextDocument((document) => {
-    console.log("Document saved: ", document.fileName);
     zipChanges();
+    const config = load_config();
     if (config.pushOnSave) {
       upload();
     }
@@ -55,6 +64,7 @@ export function activate(context: ExtensionContext) {
 
   const customMiddleware = {
     didChange: (e: TextDocumentChangeEvent): Promise<void> => {
+      const config = load_config();
       logChange(e, config);
       return new Promise((resolve, reject) => {});
     },
@@ -63,7 +73,10 @@ export function activate(context: ExtensionContext) {
   // Options to control the language client
   const clientOptions: LanguageClientOptions = {
     // Register the server for plain text documents
-    documentSelector: [{ scheme: "file", language: "lean4" }],
+    documentSelector: [
+      { scheme: "file", language: "lean4" },
+      { scheme: "file", language: "coq" },
+    ],
     synchronize: {
       // Notify the server about file changes to '.clientrc files contained in the workspace
       fileEvents: workspace.createFileSystemWatcher("**/.clientrc"),

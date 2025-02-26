@@ -11,7 +11,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onLanguage:lean4"
+    "onLanguage:lean4",
+    "onLanguage:coq"
   ],
   "main": "./client/out/extension",
   "contributes": {
@@ -19,7 +20,7 @@
       "type": "object",
       "title": "Lean Vacuum configuration",
       "properties": {
-        "language": {
+        "lean-vacuum.language": {
           "type": "string",
           "enum": [
             "lean4",
@@ -28,7 +29,7 @@
           "default": "lean4",
           "description": "For which langauge should this extension collect data."
         },
-        "pushOnSave": {
+        "lean-vacuum.pushOnSave": {
           "type": "boolean",
           "default": false,
           "desctiption": "Whether this extension pushes to the remote git repo when a file is saved."
