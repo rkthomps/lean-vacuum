@@ -1,0 +1,4 @@
+*.mjs
+/.vscode/
+/out/
+/node_modules/
