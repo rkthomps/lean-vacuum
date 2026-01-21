@@ -34,8 +34,8 @@ function setCheckpointTimer(wsPath: string) {
   }
 
   updateCheckpointTimer = setTimeout(async () => {
-    let time = await timeit(() => {
-      return updateConcreteCheckpoints(config, wsPath);
+    let time = await timeit(async () => {
+      return updateConcreteCheckpoints(wsPath, config);
     });
     console.log(`[lean-vacuum] updated concrete checkpoints in ${time}ms`);
   }, 3000);
@@ -49,10 +49,13 @@ export async function activate(context: ExtensionContext) {
   // Initial checkpoint update
   for (let ws of workspace.workspaceFolders ?? []) {
     let wsPath = ws.uri.fsPath;
-    let time = await timeit(() => {
-      return updateConcreteCheckpoints(config, wsPath);
-    });
-    console.log(`[lean-vacuum] initial concrete checkpoint update in ${time}ms`);
+    console.log("[lean-vacuum] updating concrete checkpoints for workspace:", wsPath);
+    updateConcreteCheckpoints(wsPath, config);
+    console.log("[lean-vacuum] done updating concrete checkpoints for workspace:", wsPath);
+    // let time = await timeit(async () => {
+    //   return updateConcreteCheckpoints(wsPath, config);
+    // });
+    // console.log(`[lean-vacuum] initial concrete checkpoint update in ${time}ms`);
   }
 
   // On change events
@@ -69,7 +72,7 @@ export async function activate(context: ExtensionContext) {
     setCheckpointTimer(wsPath);
 
     console.log("[lean-vacuum] changed");
-    const time = await timeit(() => {
+    const time = await timeit(async () => {
       return logChange(e, config);
     });
     console.log(`[lean-vacuum] logged change in ${time}ms`);
@@ -84,8 +87,6 @@ export async function activate(context: ExtensionContext) {
     }
   });
   context.subscriptions.push(configHook);
-
-
 }
 
 

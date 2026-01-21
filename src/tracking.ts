@@ -35,7 +35,9 @@ function isSubpath(p1: string, p2: string) {
 
 
 function getBaseCommit(wsPath: string): BaseCommit {
+  console.log(`[lean-vacuum] getting git extension for workspace: ${wsPath}`);
   const gitExtension = extensions.getExtension("vscode.git")?.exports;
+  console.log(`[lean-vacuum] git extension: ${gitExtension}`);
   if (!gitExtension) {
     return null;
   }
@@ -95,18 +97,23 @@ function findEssentialFiles(
 ): string[] {
   const rootStat = fs.lstatSync(root);
   if (rootStat.isDirectory()) {
-    let localChildren = fs
-      .readdirSync(root)
-      .map((c) => path.join(root, c))
-      .sort();
-    let allChildren: string[] = [];
-    for (let child of localChildren) {
-      allChildren = allChildren.concat(
-        findEssentialFiles(child, fileFilter, dirFilter)
-      );
+    if (!dirFilter(root)) {
+      return [];
+    } else {
+      let localChildren = fs
+        .readdirSync(root)
+        .map((c) => path.join(root, c))
+        .sort();
+      let allChildren: string[] = [];
+      for (let child of localChildren) {
+        allChildren = allChildren.concat(
+          findEssentialFiles(child, fileFilter, dirFilter)
+        );
+      }
+      return allChildren;
     }
-    return allChildren;
   } else {
+    console.log(`[lean-vacuum] Checking file: ${root}`);
     if (fileFilter(root)) {
       return [root];
     } else {
@@ -175,7 +182,9 @@ export function getTrackedFiles(
     (f) => isEssentialFile(f, config),
     (d) => isEssentialDir(d, config)
   );
+  console.log(`[lean-vacuum] checking base commit for workspace: ${wsPath}`);
   const baseCommit = getBaseCommit(wsPath);
+  console.log(`[lean-vacuum] base commit for workspace ${wsPath}: ${baseCommit === null ? "null" : baseCommit.head}`);
   if (baseCommit === null) {
     return {
       files: allFiles,
@@ -286,8 +295,11 @@ export function updateConcreteCheckpoints(
   wsPath: string,
   config: VacuumConfig,
 ): void {
+  console.log(`[lean-vacuum] getting tracked files for workspace: ${wsPath}`);
   const { files, baseCommit } = getTrackedFiles(wsPath, config);
+  console.log(`[lean-vacuum] updating concrete checkpoints for ${files.length} files in workspace: ${wsPath}`);
   for (const filePath of files) {
+    console.log(`[lean-vacuum] updating concrete checkpoint for file: ${filePath}`);
     updateConcreteCheckpoint(wsPath, filePath, config, baseCommit);
   }
 }
@@ -298,7 +310,7 @@ export function updateConcreteCheckpoints(
  * Logs a text document change to disk synchronously. 
  * Updates the concrete checkpoint for document associated with the change. 
  */
-export function logChangeSync(
+export function logChange(
   change: TextDocumentChangeEvent,
   config: VacuumConfig
 ): void {
