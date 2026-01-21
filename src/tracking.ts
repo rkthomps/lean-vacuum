@@ -1,391 +1,118 @@
 import fs = require("fs");
 import path = require("path");
+import os = require("os");
 import { Language, VacuumConfig } from "./config";
 
+import { Edit, NewContentConcreteCheckpoint } from "./types";
+
 import {
+  extensions,
   workspace,
-  ExtensionContext,
   TextDocument,
   TextDocumentChangeEvent,
-  TextDocumentContentChangeEvent,
-  Uri,
-  Range,
-  Position,
 } from "vscode";
 
-import { cwd } from "process";
-import { dir } from "console";
 
 export const CHANGES_NAME = ".changes";
 export const CONCRETE_NAME = "concrete-history"; // ASSUMPTION: A file being edited must first exist on disk.
 export const EDITS_NAME = "edits-history";
 
 
-class NewContentConcreteCheckpoint {
-  public readonly contents: string;
-  public readonly mtime: Date;
 
-  constructor(contents: string, mtime: Date) {
-    this.contents = contents;
-    this.mtime = mtime;
-  }
-
-  toJson(): any {
-    return {
-      type: "new",
-      contents: this.contents,
-      mtime: this.mtime.getTime(),
-    };
-  }
-
-  save(p: string): void {
-    const parent = path.dirname(p);
-    if (!fs.existsSync(parent)) {
-      fs.mkdirSync(parent, { recursive: true });
-    }
-    fs.writeFileSync(p, JSON.stringify(this.toJson()));
-  }
-
-  static fromJson(json: any): NewContentConcreteCheckpoint {
-    return new NewContentConcreteCheckpoint(
-      json.contents,
-      new Date(json.mtime)
-    );
-  }
-
-  static fromLeanFile(p: string): NewContentConcreteCheckpoint {
-    const contents = fs.readFileSync(p, "utf-8");
-    const mtime = fs.lstatSync(p).mtime;
-    return new NewContentConcreteCheckpoint(contents, mtime);
-  }
-
-  static load(p: string): NewContentConcreteCheckpoint {
-    const jsonContents = fs.readFileSync(p, "utf-8");
-    const json = JSON.parse(jsonContents);
-    return NewContentConcreteCheckpoint.fromJson(json);
-  }
+interface GitState {
+  head: string;
+  lastTag: string | null;
 }
 
-class SameContentConcreteCheckpoint {
-  public readonly prevMtime: Date;
-  public readonly mtime: Date;
 
-  constructor(prevMtime: Date, mtime: Date) {
-    this.prevMtime = prevMtime;
-    this.mtime = mtime;
-  }
+type BaseCommit = GitState | null;
 
-  toJson(): any {
-    return {
-      type: "same",
-      prevMtime: this.prevMtime.getTime(),
-      mtime: this.mtime.getTime(),
-    };
-  }
-
-  save(p: string): void {
-    const parent = path.dirname(p);
-    if (!fs.existsSync(parent)) {
-      fs.mkdirSync(parent, { recursive: true });
-    }
-    fs.writeFileSync(p, JSON.stringify(this.toJson()));
-  }
-
-  static fromJson(json: any): SameContentConcreteCheckpoint {
-    return new SameContentConcreteCheckpoint(
-      new Date(json.prevMtime),
-      new Date(json.mtime)
-    );
-  }
-
-  static load(p: string): SameContentConcreteCheckpoint {
-    const jsonContents = fs.readFileSync(p, "utf-8");
-    const json = JSON.parse(jsonContents);
-    return SameContentConcreteCheckpoint.fromJson(json);
-  }
-}
-
-function loadConcreteCheckpoint(p: string): ConcreteCheckpoint {
-  const jsonContents = fs.readFileSync(p, "utf-8");
-  const json = JSON.parse(jsonContents);
-  if (json.type === "new") {
-    return NewContentConcreteCheckpoint.fromJson(json);
-  } else if (json.type === "same") {
-    return SameContentConcreteCheckpoint.fromJson(json);
-  } else {
-    throw new Error("Invalid checkpoint type");
-  }
-}
-
-function loadLastNewConcreteCheckpoint(
-  p: string
-): NewContentConcreteCheckpoint {
-  const concreteCheckpoint = loadConcreteCheckpoint(p);
-  if (concreteCheckpoint instanceof NewContentConcreteCheckpoint) {
-    return concreteCheckpoint;
-  } else {
-    const prevMtime = concreteCheckpoint.prevMtime;
-    const prevCheckpointPath = path.join(
-      path.dirname(p),
-      prevMtime.getTime().toString()
-    );
-    return loadLastNewConcreteCheckpoint(prevCheckpointPath);
-  }
-}
-
-type ConcreteCheckpoint =
-  | NewContentConcreteCheckpoint
-  | SameContentConcreteCheckpoint;
-
-
-function posToJson(pos: Position): any {
-  return {
-    line: pos.line,
-    character: pos.character,
-  };
-}
-
-function posFromJson(json: any): Position {
-  return new Position(json.line, json.character);
-}
-
-function rangeToJson(range: Range): any {
-  return {
-    start: posToJson(range.start),
-    end: posToJson(range.end),
-  };
-}
-
-function rangeFromJson(json: any): Range {
-  return new Range(posFromJson(json.start), posFromJson(json.end));
-}
-
-class ContentChange {
-  public readonly range: Range;
-  public readonly text: string;
-  public readonly rangeOffset: number;
-  public readonly rangeLength: number;
-
-  constructor(
-    range: Range,
-    text: string,
-    rangeOffset: number,
-    rangeLength: number
-  ) {
-    this.range = range;
-    this.text = text;
-    this.rangeOffset = rangeOffset;
-    this.rangeLength = rangeLength;
-  }
-
-  toJson(): any {
-    return {
-      range: rangeToJson(this.range),
-      text: this.text,
-      rangeOffset: this.rangeOffset,
-      rangeLength: this.rangeLength,
-    };
-  }
-
-  static fromJson(json: any): ContentChange {
-    return new ContentChange(
-      json.range,
-      json.text,
-      json.rangeOffset,
-      json.rangeLength
-    );
-  }
-
-  static fromChange(change: TextDocumentContentChangeEvent): ContentChange {
-    return new ContentChange(
-      change.range,
-      change.text,
-      change.rangeOffset,
-      change.rangeLength
-    );
-  }
-}
-
-class Edit {
-  public readonly file: string;
-  public readonly time: Date;
-  public readonly baseTime: Date; // reference to concrete checkpoint
-  public readonly changes: ContentChange[];
-
-  constructor(
-    file: string,
-    changes: ContentChange[],
-    time: Date,
-    baseTime: Date
-  ) {
-    this.file = file;
-    this.changes = changes;
-    this.time = time;
-    this.baseTime = baseTime;
-  }
-
-  save(p: string): void {
-    const parent = path.dirname(p);
-    if (!fs.existsSync(parent)) {
-      fs.mkdirSync(parent, { recursive: true });
-    }
-    fs.writeFileSync(p, JSON.stringify(this.toJson()));
-  }
-
-  toJson(): any {
-    return {
-      file: this.file,
-      time: this.time.getTime(),
-      baseTime: this.baseTime.getTime(),
-      changes: this.changes.map((c) => c.toJson()),
-    };
-  }
-
-  static fromJson(json: any): Edit {
-    return new Edit(
-      json.file,
-      json.changes.map(ContentChange.fromJson),
-      new Date(json.time),
-      new Date(json.baseTime)
-    );
-  }
-
-  static fromChange(
-    change: TextDocumentChangeEvent,
-    time: Date,
-    baseTime: Date
-  ): Edit {
-    const fileStr = change.document.uri.path.slice();
-    const newEdit = new Edit(
-      fileStr,
-      change.contentChanges.map(ContentChange.fromChange),
-      time,
-      baseTime
-    );
-    return newEdit;
-  }
-}
-
-function walkDir(
-  root: string,
-  fileFilter: (file: string) => boolean,
-  dirFilter: (dir: string) => boolean
-): string[] {
-  const rootStat = fs.lstatSync(root);
-  if (!rootStat.isDirectory()) {
-    return [];
-  }
-
-  let localChildren = fs
-    .readdirSync(root)
-    .map((c) => path.join(root, c))
-    .sort();
-
-  let allChildren: string[] = [];
-  for (let child of localChildren) {
-    let childStat = fs.lstatSync(child);
-    if (childStat.isDirectory()) {
-      if (!dirFilter(child)) {
-        continue;
-      }
-      let decendents = walkDir(child, fileFilter, dirFilter);
-      allChildren = allChildren.concat(decendents);
-    } else if (fileFilter(child)) {
-      allChildren.push(child);
-    }
-  }
-  return allChildren;
-}
-
-// TODO: Change to do for Coq as well
-function isEssentialDir(dir: string, c: VacuumConfig): boolean {
-  const notLakeDir = !dir.endsWith(".lake");
-  const notGitDir = !dir.endsWith(".git");
-  const notChangesDir = !dir.endsWith(CHANGES_NAME);
-  return notLakeDir && notGitDir && notChangesDir;
-}
-
-function isEssentialFile(file: string, c: VacuumConfig): boolean {
-  return path.basename(file) === "lakefile.toml" || file.endsWith(".lean") || path.basename(file) === "lean-toolchain";
-}
-
-/**
- * 
- * @returns true if p2 is a subpath of p1 false otherwise
- */
 
 function isSubpath(p1: string, p2: string) {
   const relpath = path.relative(p1, p2);
   return relpath && !relpath.startsWith("..") && !path.isAbsolute(relpath);
 }
 
-// export function getAncestorPaths(): string[] {
-//   let workspaceFolders = workspace.workspaceFolders;
-//   if (workspaceFolders === undefined || workspaceFolders.length === 0) {
-//     return [];
-//   }
-//   let paths = workspaceFolders.map((folder) => path.resolve(folder.uri.fsPath));
-//   let ancestorPaths = [];
-//   for (let p of paths) {
-//     let hasAncestor = paths
-//       .map((parent) => isSubpath(parent, p))
-//       .some((x) => x);
-//     if (!hasAncestor) {
-//       ancestorPaths.push(p);
-//     }
-//   }
-//   return ancestorPaths;
-// }
 
-
-// Need this to see if we need to
-// create a new project checkpoint.
-// Otherwise, we can just save a new checkpoint
-// every n changes.
-// Maybe when we encounter a new file?
-function rollForward(orig: String, changes: TextDocumentContentChangeEvent[]) { }
-
-/**
- * 
- * @returns The most recent entry in the concrete history for the given document. 
- */
-function getLastConcreteCheckpointPath(changePath: string, documentPath: string): string | null {
-  const relPath = path.relative(path.dirname(changePath), documentPath);
-  const concretePath = path.join(changePath, relPath, CONCRETE_NAME);
-  if (!fs.existsSync(concretePath)) {
+function getBaseCommit(wsPath: string): BaseCommit {
+  const gitExtension = extensions.getExtension("vscode.git")?.exports;
+  if (!gitExtension) {
     return null;
   }
-  const concreteFiles = fs.readdirSync(concretePath);
-  let mTimes: number[] = [];
-  for (let f of concreteFiles) {
-    let mtime = parseInt(path.basename(f), 10);
-    mTimes.push(mtime);
-  }
-  if (mTimes.length === 0) {
+
+  const api = gitExtension.getAPI(1);
+  const repos = api.repositories;
+  if (repos.length === 0) {
     return null;
-  } else {
-    const largestTime = Math.max(...mTimes);
-    return path.join(concretePath, largestTime.toString());
   }
+
+  const repo = repos.find((r: any) => wsPath.startsWith(r.rootUri.fsPath));
+  if (!repo) {
+    return null;
+  }
+
+  // const remote = repo.state.remotes[0]?.fetchUrl || "";
+  const commit = repo.state.HEAD?.commit || "";
+  return {
+    head: commit,
+    lastTag: null, /* TODO: For now, not shelling out to git to get the last tag */
+  };
+
 }
 
 
-function createConcreteCheckpoint(
-  p: string,
-  lastPath: string | null
-): ConcreteCheckpoint {
-  const newCandidateCheckpoint = NewContentConcreteCheckpoint.fromLeanFile(p);
-  if (lastPath === null) {
-    return newCandidateCheckpoint;
+
+
+/**
+ * Defines whether a directory is essential for tracking.
+ */
+function isEssentialDir(dir: string, config: VacuumConfig): boolean {
+  const notLakeDir = !dir.endsWith(".lake");
+  const notGitDir = !dir.endsWith(".git");
+  const notChangesDir = !dir.endsWith(CHANGES_NAME);
+  return notLakeDir && notGitDir && notChangesDir;
+}
+
+/**
+ * Defines whether a file is essential for tracking.
+ */
+function isEssentialFile(file: string, config: VacuumConfig): boolean {
+  const isLakeFileLean = path.basename(file) === "lakefile.lean";
+  const isLakeFileToml = path.basename(file) === "lakefile.toml";
+  const isLeanToolChain = path.basename(file) === "lean-toolchain";
+  const isLeanSrc = file.endsWith(".lean");
+  return isLakeFileLean || isLakeFileToml || isLeanToolChain || isLeanSrc;
+}
+
+
+/**
+ * Recursively finds all essential files in a directory. 
+ */
+function findEssentialFiles(
+  root: string,
+  fileFilter: (file: string) => boolean,
+  dirFilter: (dir: string) => boolean
+): string[] {
+  const rootStat = fs.lstatSync(root);
+  if (rootStat.isDirectory()) {
+    let localChildren = fs
+      .readdirSync(root)
+      .map((c) => path.join(root, c))
+      .sort();
+    let allChildren: string[] = [];
+    for (let child of localChildren) {
+      allChildren = allChildren.concat(
+        findEssentialFiles(child, fileFilter, dirFilter)
+      );
+    }
+    return allChildren;
+  } else {
+    if (fileFilter(root)) {
+      return [root];
+    } else {
+      return [];
+    }
   }
-  const lastCheckpoint = loadLastNewConcreteCheckpoint(lastPath);
-  if (lastCheckpoint.contents === newCandidateCheckpoint.contents) {
-    return new SameContentConcreteCheckpoint(
-      lastCheckpoint.mtime,
-      newCandidateCheckpoint.mtime
-    );
-  }
-  return newCandidateCheckpoint;
 }
 
 
@@ -423,111 +150,171 @@ export function getWorkspacePath(d: TextDocument): string | undefined {
   return candidates[0];
 }
 
-class AsyncLock {
-  private last: Promise<void> = Promise.resolve();
 
-  // Acquire lock, run fn, return its result
-  acquire(fn: () => Promise<void>): Promise<void> {
-    const p = this.last.then(() => fn());
-    // Keep the chain alive even if fn rejects
-    this.last = p.catch(() => { });
-    return p;
+export interface TrackedFileResult {
+  files: string[];
+  baseCommit: BaseCommit;
+}
+
+
+/**
+ * Get the tracked files in a workspace. 
+ * This includes the following files:
+ * - If there is no .git history, all of the files of interest in the workspace. 
+ * - If there is a .git history, the intersection of the files of interest and 
+ *   the files **modified** since the last commit. 
+ * 
+ * - TODO: The last commit could be the base commit.
+ */
+export function getTrackedFiles(
+  wsPath: string,
+  config: VacuumConfig
+): TrackedFileResult {
+  const allFiles = findEssentialFiles(
+    wsPath,
+    (f) => isEssentialFile(f, config),
+    (d) => isEssentialDir(d, config)
+  );
+  const baseCommit = getBaseCommit(wsPath);
+  if (baseCommit === null) {
+    return {
+      files: allFiles,
+      baseCommit: null,
+    };
+  } else {
+    return {
+      files: allFiles,
+      baseCommit,
+    };
   }
 }
-const logLock = new AsyncLock();
 
 
-function updateConcreteCheckpointsSync(c: VacuumConfig, wsPath: string) {
-  if (wsPath === undefined) {
-    return;
+function getCommitName(baseCommit: BaseCommit): string {
+  if (baseCommit === null) {
+    return "no-git";
+  } else {
+    return baseCommit.head;
   }
-  const changePath = path.join(wsPath, CHANGES_NAME);
+}
 
-  const fileFilter = (file: string) => isEssentialFile(file, c);
-  const dirFilter = (dir: string) => isEssentialDir(dir, c);
-  const files = walkDir(wsPath, fileFilter, dirFilter);
-  console.log(`Found ${files.length} files to check for concrete checkpoint updates.`);
-  for (let f of files) {
-    const fileStat = fs.lstatSync(f);
-    const saveLoc = path.join(
-      changePath,
-      path.relative(wsPath, f),
-      CONCRETE_NAME,
-      fileStat.mtime.getTime().toString()
-    );
-    const lastConcretePath = getLastConcreteCheckpointPath(changePath, f);
-    if (lastConcretePath === null) {
-      // There was no checkpoint beforehand, so we need to save the first one.
-      const newConcreteCheckpoint = createConcreteCheckpoint(f, null);
-      newConcreteCheckpoint.save(saveLoc);
-    } else {
-      /* We compare to the previous checkpoint. If the file has been saved since then, 
-         we create a new checkpoint */
-      const concreteVal = parseInt(path.basename(lastConcretePath), 10);
-      const lastConcreteTime = new Date(concreteVal);
-      if (lastConcreteTime < fileStat.mtime) {
-        console.log("TIMES DIFFER!");
-        const newConcreteCheckpoint = createConcreteCheckpoint(
-          f,
-          lastConcretePath
-        );
-        newConcreteCheckpoint.save(saveLoc);
-      }
+
+function getEditsDir(wsPath: string, baseCommit: BaseCommit, filePath: string): string {
+  const commitName = getCommitName(baseCommit);
+  const fileRelPath = path.relative(wsPath, filePath);
+  return path.join(wsPath, CHANGES_NAME, commitName, fileRelPath, EDITS_NAME);
+}
+
+
+/**
+ * Returns the location of the given file's concrete checkpoint directory.
+ */
+function getConcreteCheckpointDir(wsPath: string, baseCommit: BaseCommit, filePath: string): string {
+  const commitName = getCommitName(baseCommit);
+  const fileRelPath = path.relative(wsPath, filePath);
+  return path.join(wsPath, CHANGES_NAME, commitName, fileRelPath, CONCRETE_NAME);
+}
+
+
+/**
+ * 
+ * @returns The most recent entry in the concrete history for the given document. 
+ */
+function getLastConcreteCheckpointPath(concretePath: string): string | null {
+  if (!fs.existsSync(concretePath)) {
+    return null;
+  }
+  const concreteFiles = fs.readdirSync(concretePath);
+  let mTimes: number[] = [];
+  for (let f of concreteFiles) {
+    let mtime = parseInt(path.basename(f), 10);
+    mTimes.push(mtime);
+  }
+  if (mTimes.length === 0) {
+    return null;
+  } else {
+    const largestTime = Math.max(...mTimes);
+    return path.join(concretePath, largestTime.toString());
+  }
+}
+
+
+
+/**
+ * Updates the concrete checkpoint for a given file in the workspace. 
+ * Simply checks if the file has been modified since the last checkpoint
+ * was saved.
+ * @param wsPath : The workspace path e.g. /work
+ * @param filePath : The file path to update e.g. /work/file
+ * @param config 
+ * @param baseCommit 
+ * @returns 
+ */
+function updateConcreteCheckpoint(
+  wsPath: string,
+  filePath: string,
+  config: VacuumConfig,
+  baseCommit: BaseCommit,
+): void {
+  const fileStat = fs.lstatSync(filePath);
+  const concreteDir = getConcreteCheckpointDir(wsPath, baseCommit, filePath);
+
+  if (fs.existsSync(concreteDir)) {
+    const changeStat = fs.lstatSync(concreteDir);
+    if (fileStat.mtime < changeStat.mtime) {
+      // No update needed
+      return;
     }
   }
-}
 
-export async function updateConcreteCheckpoints(
-  c: VacuumConfig,
-  wsPath: string,
-): Promise<void> {
-  return logLock.acquire(() =>
-    Promise.resolve(updateConcreteCheckpointsSync(c, wsPath))
+  const newCheckpoint = NewContentConcreteCheckpoint.fromLeanFile(filePath);
+  const checkpointSavePath = path.join(
+    concreteDir,
+    fileStat.mtime.getTime().toString()
   );
+  newCheckpoint.save(checkpointSavePath);
 }
 
-function logChangeSync(
+
+
+/**
+ * Updates the concrete checkpoints for all tracked files in the workspace.
+ * This ensures that we can reproduce the state of the workspace when we  
+ * want to replay an edit.
+ */
+export function updateConcreteCheckpoints(
+  wsPath: string,
+  config: VacuumConfig,
+): void {
+  const { files, baseCommit } = getTrackedFiles(wsPath, config);
+  for (const filePath of files) {
+    updateConcreteCheckpoint(wsPath, filePath, config, baseCommit);
+  }
+}
+
+
+
+/**
+ * Logs a text document change to disk synchronously. 
+ * Updates the concrete checkpoint for document associated with the change. 
+ */
+export function logChangeSync(
   change: TextDocumentChangeEvent,
-  c: VacuumConfig
+  config: VacuumConfig
 ): void {
   const wsPath = getWorkspacePath(change.document);
   if (wsPath === undefined) {
     return;
   }
 
-  const changePath = path.join(wsPath, CHANGES_NAME);
+  const filePath = change.document.uri.fsPath;
+  const baseCommit = getBaseCommit(wsPath);
 
-  console.log("LOGGING CHANGE");
+  updateConcreteCheckpoint(wsPath, filePath, config, baseCommit);
   const time = new Date();
-  let lastConcretePath = getLastConcreteCheckpointPath(
-    changePath,
-    change.document.uri.fsPath
-  );
-
-  if (lastConcretePath === null) {
-    // This is currently pretty slow
-    updateConcreteCheckpointsSync(c, wsPath);
-    lastConcretePath = getLastConcreteCheckpointPath(
-      changePath,
-      change.document.uri.fsPath
-    );
-  }
-  if (lastConcretePath === null) {
-    throw new Error(`No concrete checkpoint found for file ${change.document.uri.fsPath}`);
-  }
-
-  const lastMTime = new Date(Number(path.basename(lastConcretePath)));
-
-  const newEdit = Edit.fromChange(change, time, lastMTime);
-  const relPath = path.relative(path.dirname(changePath), newEdit.file);
-  newEdit.save(
-    path.join(changePath, relPath, EDITS_NAME, time.getTime().toString())
-  );
+  const newEdit = Edit.fromChange(change, time);
+  const editsDir = getEditsDir(wsPath, baseCommit, filePath);
+  const saveLoc = path.join(editsDir, time.getTime().toString());
+  newEdit.save(saveLoc);
 }
 
-export async function logChange(
-  change: TextDocumentChangeEvent,
-  c: VacuumConfig
-): Promise<void> {
-  return logLock.acquire(() => Promise.resolve(logChangeSync(change, c)));
-}
