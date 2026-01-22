@@ -1,8 +1,9 @@
 {
   "name": "lean-vacuum",
   "displayName": "lean-vacuum",
+  "publisher": "KyleThompson",
   "description": "",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/rkthomps/lean-vacuum"

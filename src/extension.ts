@@ -28,8 +28,8 @@ async function timeit<T>(f: () => Promise<T>): Promise<number> {
   return Number(end - start) / 1_000_000;
 }
 
-// const UPLOAD_TIME_MS = 5 * 60 * 1000;
-const UPLOAD_TIME_MS = 20 * 1000;
+const UPLOAD_TIME_MS = 5 * 60 * 1000;
+// const UPLOAD_TIME_MS = 20 * 1000;
 const CHECKPOINT_TIME_MS = 3 * 1000;
 
 
