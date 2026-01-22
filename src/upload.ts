@@ -9,6 +9,7 @@ import FormData from "form-data";
 
 import { CHANGES_NAME } from "./tracking";
 
+// const UPLOAD_URL = "http://127.0.0.1:8000/upload";
 const UPLOAD_URL = "https://vacuum-validator.rkthomps.com/upload";
 
 function createZipBuffer(sourceDir: string): Buffer {

@@ -12,6 +12,8 @@ import {
   TextDocumentChangeEvent,
 } from "vscode";
 
+// import type { Repository, GitExtension } from 'vscode.git';
+
 
 export const CHANGES_NAME = ".changes";
 export const CONCRETE_NAME = "concrete-history"; // ASSUMPTION: A file being edited must first exist on disk.
@@ -24,37 +26,64 @@ interface Remote {
   pushUrl: string | null;
 }
 
+interface LocalState {
+  type: "local";
+  hostname: string;
+  osUsername: string;
+  workspaceName: string;
+}
+
 interface GitState {
+  type: "git";
+  hostname: string;
+  osUsername: string;
+  workspaceName: string;
   head: string;
   lastTag: string | null;
   remotes: Remote[];
 }
 
 
-type BaseCommit = GitState | null;
+type BaseCommit = GitState | LocalState;
 
 function isSubpath(p1: string, p2: string) {
   const relpath = path.relative(p1, p2);
   return relpath && !relpath.startsWith("..") && !path.isAbsolute(relpath);
 }
 
+export function getLocalState(wsPath: string): LocalState {
+  const workspaceName = path.basename(wsPath);
+  return {
+    type: "local",
+    hostname: os.hostname(),
+    osUsername: os.userInfo().username,
+    workspaceName: workspaceName,
+  };
+}
 
-export function getBaseCommit(wsPath: string): BaseCommit {
+function workingTreeFiles(wsPath: string, repo: any): string[] {
+  return repo.state.workingTreeChanges.map((change: any) => {
+    return change.uri.fsPath;
+  });
+}
+
+export function getBaseCommit(wsPath: string): [BaseCommit, string[] | null] {
   console.log(`[lean-vacuum] getting git extension for workspace: ${wsPath}`);
   const gitExtension = extensions.getExtension("vscode.git")?.exports;
+  const localState = getLocalState(wsPath);
   if (!gitExtension) {
-    return null;
+    return [localState, null];
   }
 
   const api = gitExtension.getAPI(1);
   const repos = api.repositories;
   if (repos.length === 0) {
-    return null;
+    return [localState, null];
   }
 
   const repo = repos.find((r: any) => wsPath.startsWith(r.rootUri.fsPath));
   if (!repo) {
-    return null;
+    return [localState, null];
   }
 
   const remotes = repo.state.remotes.map((r: any) => ({
@@ -65,11 +94,20 @@ export function getBaseCommit(wsPath: string): BaseCommit {
 
   // const remote = repo.state.remotes[0]?.fetchUrl || "";
   const commit = repo.state.HEAD?.commit || "";
-  return {
+
+  const baseCommit: GitState = {
+    type: "git",
+    hostname: localState.hostname,
+    osUsername: localState.osUsername,
+    workspaceName: localState.workspaceName,
     head: commit,
     lastTag: null, /* TODO: For now, not shelling out to git to get the last tag */
     remotes: remotes,
   };
+
+  const modifiedFiles = workingTreeFiles(wsPath, repo);
+
+  return [baseCommit, modifiedFiles];
 
 }
 
@@ -187,18 +225,23 @@ export function getTrackedFiles(
   wsPath: string,
   config: VacuumConfig
 ): TrackedFileResult {
-  const allFiles = findEssentialFiles(
-    wsPath,
-    (f) => isEssentialFile(f, config),
-    (d) => isEssentialDir(d, config)
-  );
-  const baseCommit = getBaseCommit(wsPath);
-  if (baseCommit === null) {
+  const [baseCommit, modifiedFiles] = getBaseCommit(wsPath);
+
+  let filesToTrack: string[] = [];
+  if (modifiedFiles !== null) {
+    filesToTrack = modifiedFiles.filter((f) => isEssentialFile(f, config));
+    console.log(`[lean-vacuum] tracked files in workspace: ${wsPath}: ${filesToTrack.length}`);
     return {
-      files: allFiles,
-      baseCommit: null,
+      files: filesToTrack,
+      baseCommit,
     };
   } else {
+    const allFiles = findEssentialFiles(
+      wsPath,
+      (f) => isEssentialFile(f, config),
+      (d) => isEssentialDir(d, config)
+    );
+
     return {
       files: allFiles,
       baseCommit,
@@ -206,15 +249,13 @@ export function getTrackedFiles(
   }
 }
 
-
 function getCommitName(baseCommit: BaseCommit): string {
-  if (baseCommit === null) {
-    return "no-git";
-  } else {
+  if ("head" in baseCommit) {
     return baseCommit.head;
+  } else {
+    return "no-git";
   }
 }
-
 
 export function getChangesDir(wsPath: string, baseCommit: BaseCommit): string {
   const commitName = getCommitName(baseCommit);
@@ -321,7 +362,7 @@ export function logChange(
   }
 
   const filePath = change.document.uri.fsPath;
-  const baseCommit = getBaseCommit(wsPath);
+  const [baseCommit, _] = getBaseCommit(wsPath);
 
   updateConcreteCheckpoint(wsPath, filePath, config, baseCommit);
   const time = new Date();

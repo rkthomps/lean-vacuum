@@ -44,7 +44,7 @@ function setUploadTimer(wsPath: string) {
   console.log(`[lean-vacuum] setting upload timer`);
   uploadTimer = setTimeout(async () => {
     let time = await timeit(async () => {
-      let baseCommit = getBaseCommit(wsPath);
+      let [baseCommit, _] = getBaseCommit(wsPath);
       let changesDir = getChangesDir(wsPath, baseCommit);
       console.log(`[lean-vacuum] sending upload request`);
       await upload(changesDir);
