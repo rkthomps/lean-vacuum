@@ -18,15 +18,20 @@ export const CONCRETE_NAME = "concrete-history"; // ASSUMPTION: A file being edi
 export const EDITS_NAME = "edits-history";
 
 
+interface Remote {
+  name: string;
+  fetchUrl: string | null;
+  pushUrl: string | null;
+}
 
 interface GitState {
   head: string;
   lastTag: string | null;
+  remotes: Remote[];
 }
 
 
 type BaseCommit = GitState | null;
-
 
 function isSubpath(p1: string, p2: string) {
   const relpath = path.relative(p1, p2);
@@ -34,10 +39,9 @@ function isSubpath(p1: string, p2: string) {
 }
 
 
-function getBaseCommit(wsPath: string): BaseCommit {
+export function getBaseCommit(wsPath: string): BaseCommit {
   console.log(`[lean-vacuum] getting git extension for workspace: ${wsPath}`);
   const gitExtension = extensions.getExtension("vscode.git")?.exports;
-  console.log(`[lean-vacuum] git extension: ${gitExtension}`);
   if (!gitExtension) {
     return null;
   }
@@ -53,11 +57,18 @@ function getBaseCommit(wsPath: string): BaseCommit {
     return null;
   }
 
+  const remotes = repo.state.remotes.map((r: any) => ({
+    name: r.name,
+    fetchUrl: r.fetchUrl ?? null,
+    pushUrl: r.pushUrl ?? null,
+  }));
+
   // const remote = repo.state.remotes[0]?.fetchUrl || "";
   const commit = repo.state.HEAD?.commit || "";
   return {
     head: commit,
     lastTag: null, /* TODO: For now, not shelling out to git to get the last tag */
+    remotes: remotes,
   };
 
 }
@@ -113,7 +124,6 @@ function findEssentialFiles(
       return allChildren;
     }
   } else {
-    console.log(`[lean-vacuum] Checking file: ${root}`);
     if (fileFilter(root)) {
       return [root];
     } else {
@@ -182,9 +192,7 @@ export function getTrackedFiles(
     (f) => isEssentialFile(f, config),
     (d) => isEssentialDir(d, config)
   );
-  console.log(`[lean-vacuum] checking base commit for workspace: ${wsPath}`);
   const baseCommit = getBaseCommit(wsPath);
-  console.log(`[lean-vacuum] base commit for workspace ${wsPath}: ${baseCommit === null ? "null" : baseCommit.head}`);
   if (baseCommit === null) {
     return {
       files: allFiles,
@@ -208,12 +216,22 @@ function getCommitName(baseCommit: BaseCommit): string {
 }
 
 
+export function getChangesDir(wsPath: string, baseCommit: BaseCommit): string {
+  const commitName = getCommitName(baseCommit);
+  return path.join(wsPath, CHANGES_NAME, commitName);
+}
+
+function getMetadataLoc(wsPath: string, baseCommit: BaseCommit): string {
+  const changesDir = getChangesDir(wsPath, baseCommit);
+  return path.join(changesDir, "metadata.json");
+}
+
+
 function getEditsDir(wsPath: string, baseCommit: BaseCommit, filePath: string): string {
   const commitName = getCommitName(baseCommit);
   const fileRelPath = path.relative(wsPath, filePath);
   return path.join(wsPath, CHANGES_NAME, commitName, fileRelPath, EDITS_NAME);
 }
-
 
 /**
  * Returns the location of the given file's concrete checkpoint directory.
@@ -223,30 +241,6 @@ function getConcreteCheckpointDir(wsPath: string, baseCommit: BaseCommit, filePa
   const fileRelPath = path.relative(wsPath, filePath);
   return path.join(wsPath, CHANGES_NAME, commitName, fileRelPath, CONCRETE_NAME);
 }
-
-
-/**
- * 
- * @returns The most recent entry in the concrete history for the given document. 
- */
-function getLastConcreteCheckpointPath(concretePath: string): string | null {
-  if (!fs.existsSync(concretePath)) {
-    return null;
-  }
-  const concreteFiles = fs.readdirSync(concretePath);
-  let mTimes: number[] = [];
-  for (let f of concreteFiles) {
-    let mtime = parseInt(path.basename(f), 10);
-    mTimes.push(mtime);
-  }
-  if (mTimes.length === 0) {
-    return null;
-  } else {
-    const largestTime = Math.max(...mTimes);
-    return path.join(concretePath, largestTime.toString());
-  }
-}
-
 
 
 /**
@@ -285,6 +279,14 @@ function updateConcreteCheckpoint(
 }
 
 
+function saveMetadata(wsPath: string, metadata: BaseCommit): void {
+  const metadataDir = getMetadataLoc(wsPath, metadata);
+  const parentDir = path.dirname(metadataDir);
+  if (!fs.existsSync(parentDir)) {
+    fs.mkdirSync(parentDir, { recursive: true });
+  }
+  fs.writeFileSync(metadataDir, JSON.stringify(metadata));
+}
 
 /**
  * Updates the concrete checkpoints for all tracked files in the workspace.
@@ -295,13 +297,12 @@ export function updateConcreteCheckpoints(
   wsPath: string,
   config: VacuumConfig,
 ): void {
-  console.log(`[lean-vacuum] getting tracked files for workspace: ${wsPath}`);
+  console.log(`[lean-vacuum] updating concrete checkpoints for workspace: ${wsPath}`);
   const { files, baseCommit } = getTrackedFiles(wsPath, config);
-  console.log(`[lean-vacuum] updating concrete checkpoints for ${files.length} files in workspace: ${wsPath}`);
   for (const filePath of files) {
-    console.log(`[lean-vacuum] updating concrete checkpoint for file: ${filePath}`);
     updateConcreteCheckpoint(wsPath, filePath, config, baseCommit);
   }
+  saveMetadata(wsPath, baseCommit);
 }
 
 

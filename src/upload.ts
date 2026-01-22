@@ -7,7 +7,7 @@ import path from "path";
 import axios from "axios";
 import FormData from "form-data";
 
-import { CHANGES_NAME } from "./tracking"
+import { CHANGES_NAME } from "./tracking";
 
 const UPLOAD_URL = "https://vacuum-validator.rkthomps.com/upload";
 
@@ -36,8 +36,12 @@ function createZipBuffer(sourceDir: string): Buffer {
 }
 
 
-export async function upload(wsPath: string): Promise<void> {
-    const changesPath = path.join(wsPath, CHANGES_NAME);
+/**
+ * 
+ * @param changesPath Path to the changes directory. This will generally correspond to a specific commit. 
+ * Todo: When do delete old change directories? Some # of days?
+ */
+export async function upload(changesPath: string): Promise<void> {
     if (!fs.existsSync(changesPath)) {
         console.error(`Changes directory does not exist at ${changesPath}`);
         return;
