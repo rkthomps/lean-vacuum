@@ -1,7 +1,7 @@
 import fs = require("fs");
 import path = require("path");
 import os = require("os");
-import { Language, VacuumConfig } from "./config";
+import { VacuumConfig } from "./config";
 
 import { Edit, NewContentConcreteCheckpoint } from "./types";
 
@@ -31,6 +31,7 @@ interface LocalState {
   hostname: string;
   osUsername: string;
   workspaceName: string;
+  consentName: string;
 }
 
 interface GitState {
@@ -41,6 +42,7 @@ interface GitState {
   head: string;
   lastTag: string | null;
   remotes: Remote[];
+  consentName: string;
 }
 
 
@@ -51,13 +53,14 @@ function isSubpath(p1: string, p2: string) {
   return relpath && !relpath.startsWith("..") && !path.isAbsolute(relpath);
 }
 
-export function getLocalState(wsPath: string): LocalState {
+export function getLocalState(wsPath: string, consentName: string): LocalState {
   const workspaceName = path.basename(wsPath);
   return {
     type: "local",
     hostname: os.hostname(),
     osUsername: os.userInfo().username,
     workspaceName: workspaceName,
+    consentName: consentName,
   };
 }
 
@@ -67,10 +70,10 @@ function workingTreeFiles(wsPath: string, repo: any): string[] {
   });
 }
 
-export function getBaseCommit(wsPath: string): [BaseCommit, string[] | null] {
-  console.log(`[lean-vacuum] getting git extension for workspace: ${wsPath}`);
+export function getBaseCommit(wsPath: string, consentName: string): [BaseCommit, string[] | null] {
+  // console.log(`[lean-vacuum] getting git extension for workspace: ${wsPath}`);
   const gitExtension = extensions.getExtension("vscode.git")?.exports;
-  const localState = getLocalState(wsPath);
+  const localState = getLocalState(wsPath, consentName);
   if (!gitExtension) {
     return [localState, null];
   }
@@ -103,6 +106,7 @@ export function getBaseCommit(wsPath: string): [BaseCommit, string[] | null] {
     head: commit,
     lastTag: null, /* TODO: For now, not shelling out to git to get the last tag */
     remotes: remotes,
+    consentName: localState.consentName,
   };
 
   const modifiedFiles = workingTreeFiles(wsPath, repo);
@@ -223,9 +227,10 @@ export interface TrackedFileResult {
  */
 export function getTrackedFiles(
   wsPath: string,
-  config: VacuumConfig
+  config: VacuumConfig,
+  consentName: string
 ): TrackedFileResult {
-  const [baseCommit, modifiedFiles] = getBaseCommit(wsPath);
+  const [baseCommit, modifiedFiles] = getBaseCommit(wsPath, consentName);
 
   let filesToTrack: string[] = [];
   if (modifiedFiles !== null) {
@@ -337,9 +342,10 @@ function saveMetadata(wsPath: string, metadata: BaseCommit): void {
 export function updateConcreteCheckpoints(
   wsPath: string,
   config: VacuumConfig,
+  consentName: string
 ): void {
   console.log(`[lean-vacuum] updating concrete checkpoints for workspace: ${wsPath}`);
-  const { files, baseCommit } = getTrackedFiles(wsPath, config);
+  const { files, baseCommit } = getTrackedFiles(wsPath, config, consentName);
   for (const filePath of files) {
     updateConcreteCheckpoint(wsPath, filePath, config, baseCommit);
   }
@@ -354,7 +360,8 @@ export function updateConcreteCheckpoints(
  */
 export function logChange(
   change: TextDocumentChangeEvent,
-  config: VacuumConfig
+  config: VacuumConfig,
+  consentName: string
 ): void {
   const wsPath = getWorkspacePath(change.document);
   if (wsPath === undefined) {
@@ -362,7 +369,7 @@ export function logChange(
   }
 
   const filePath = change.document.uri.fsPath;
-  const [baseCommit, _] = getBaseCommit(wsPath);
+  const [baseCommit, _] = getBaseCommit(wsPath, consentName);
 
   updateConcreteCheckpoint(wsPath, filePath, config, baseCommit);
   const time = new Date();
