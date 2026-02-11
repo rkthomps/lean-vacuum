@@ -1,4 +1,4 @@
-import { workspace, ExtensionContext, TextDocumentChangeEvent } from "vscode";
+import vscode, { workspace } from "vscode";
 
 import {
   logChange,
@@ -10,12 +10,147 @@ import {
 
 import { upload } from "./upload";
 
-import { VacuumConfig, Language, load_config } from "./config";
+import { VacuumConfig, load_config } from "./config";
+
+import { EXTENSION_NAME, CONSENT_URL, extensionLog } from "./common";
 
 
-let updateCheckpointTimer: NodeJS.Timeout | null = null;
-let uploadTimer: NodeJS.Timeout | null = null;
-let config: VacuumConfig = load_config();
+function createStatusBar(): vscode.StatusBarItem {
+  const item = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    100,
+  );
+  item.command = `${EXTENSION_NAME}.toggleEnabled`;
+  return item;
+}
+
+
+class VacuumController {
+  private updateCheckpointTimer: NodeJS.Timeout | null;
+  private uploadTimer: NodeJS.Timeout | null;
+  private config: VacuumConfig;
+  private statusBarItem: vscode.StatusBarItem;
+
+  constructor(config: VacuumConfig) {
+    this.updateCheckpointTimer = null;
+    this.uploadTimer = null;
+    this.config = config;
+    this.statusBarItem = createStatusBar();
+    this.renderStatusBar();
+  }
+
+  getStatusBarItem(): vscode.StatusBarItem {
+    return this.statusBarItem;
+  }
+
+  renderStatusBar() {
+    if (this.config.enabled) {
+      this.statusBarItem.text = `Lean Vacuum: ON`;
+    } else {
+      this.statusBarItem.text = `Lean Vacuum: OFF`;
+    }
+    this.statusBarItem.show();
+  }
+
+  getConfig(): VacuumConfig {
+    return this.config;
+  }
+
+  updateConfig(config: VacuumConfig) {
+    this.config = config;
+  }
+
+  nameNonempty(): boolean {
+    return this.config.participantName !== undefined && this.config.participantName.trim() !== "";
+  }
+
+  effectivelyEnabled(): boolean {
+    return this.config.enabled && this.nameNonempty();
+  }
+
+  setUploadTimer(wsPath: string) {
+    if (this.uploadTimer) {
+      return;
+    }
+    extensionLog(`setting upload timer`);
+    this.uploadTimer = setTimeout(async () => {
+      let time = await timeit(async () => {
+        if (this.effectivelyEnabled()) {
+          let participantName = this.config.participantName!;
+          let [baseCommit, _] = getBaseCommit(wsPath, participantName);
+          let changesDir = getChangesDir(wsPath, baseCommit);
+          extensionLog(`sending upload request`);
+          await upload(changesDir);
+        }
+      });
+      extensionLog(`uploaded changes in ${time}ms`);
+      this.uploadTimer = null;
+    }, UPLOAD_TIME_MS);
+  }
+
+
+  setCheckpointTimer(wsPath: string) {
+    if (this.updateCheckpointTimer) {
+      clearTimeout(this.updateCheckpointTimer);
+    }
+
+    this.updateCheckpointTimer = setTimeout(async () => {
+      let time = await timeit(async () => {
+        if (this.effectivelyEnabled()) {
+          const participantName = this.config.participantName!;
+          return updateConcreteCheckpoints(wsPath, this.config, participantName);
+        }
+      });
+      extensionLog(`updated concrete checkpoints in ${time}ms`);
+    }, CHECKPOINT_TIME_MS);
+  }
+}
+
+
+function showConsentUrl() {
+  const openForm = "Open Consent Form";
+  const completeForm = "I have completed the form";
+  vscode.window.showWarningMessage(
+    "Please ensure you've completed the Lean Vacuum Consent Form before using the extension.",
+    { modal: true },
+    openForm,
+    completeForm
+  ).then(selection => {
+    if (selection === openForm) {
+      vscode.env.openExternal(
+        vscode.Uri.parse(CONSENT_URL)
+      );
+    }
+  });
+}
+
+
+async function askForName(): Promise<string | undefined> {
+  const name = await vscode.window.showInputBox({
+    title: "Lean Vacuum",
+    prompt: "Enter your name (as written on the consent form)",
+    placeHolder: "Your name",
+    ignoreFocusOut: true, // keeps the box open if the user clicks outside
+    validateInput: (value) => {
+      if (!value.trim()) {
+        return "Name cannot be empty";
+      } else {
+        return null;
+      }
+    },
+  });
+  return name; // undefined if user cancels
+}
+
+let controller: VacuumController | undefined = undefined;
+
+
+function getController(): VacuumController {
+  if (controller === undefined) {
+    controller = new VacuumController(load_config());
+  }
+  return controller;
+}
 
 
 /** 
@@ -33,79 +168,87 @@ const UPLOAD_TIME_MS = 5 * 60 * 1000;
 const CHECKPOINT_TIME_MS = 3 * 1000;
 
 
-/**
- * Sets the upload timer to upload changes every 5 minutes.
- */
-function setUploadTimer(wsPath: string) {
-  if (uploadTimer) {
-    return;
-  }
 
-  console.log(`[lean-vacuum] setting upload timer`);
-  uploadTimer = setTimeout(async () => {
-    let time = await timeit(async () => {
-      let [baseCommit, _] = getBaseCommit(wsPath);
-      let changesDir = getChangesDir(wsPath, baseCommit);
-      console.log(`[lean-vacuum] sending upload request`);
-      await upload(changesDir);
-    });
-    console.log(`[lean-vacuum] uploaded changes in ${time}ms`);
-    uploadTimer = null;
-  }, UPLOAD_TIME_MS);
-}
-
-
-/**
- * Sets the checkpoint timer to update concrete checkpoints in 3 seconds.
- * If the timer is already set, it clears it and resets it.
- */
-function setCheckpointTimer(wsPath: string) {
-  if (updateCheckpointTimer) {
-    clearTimeout(updateCheckpointTimer);
-  }
-
-  updateCheckpointTimer = setTimeout(async () => {
-    let time = await timeit(async () => {
-      return updateConcreteCheckpoints(wsPath, config);
-    });
-    console.log(`[lean-vacuum] updated concrete checkpoints in ${time}ms`);
-  }, CHECKPOINT_TIME_MS);
-}
-
-
-export async function activate(context: ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
   // Right now no need for the config
   console.log("[lean-vacuum] activated");
+  const controller = getController();
+  console.log(`[lean-vacuum] effectively enabled: ${controller.effectivelyEnabled()}`);
+  console.log(`[lean-vacuum] participant name: ${controller.getConfig().participantName}`);
+
+  // Show consent command
+  const showConsentCommand = vscode.commands.registerCommand(`${EXTENSION_NAME}.showConsentUrl`, () => {
+    showConsentUrl();
+  });
+  context.subscriptions.push(showConsentCommand);
+
+
+  // Toggle enabled/disabled command 
+  const toggleEnabledCommand = vscode.commands.registerCommand(`${EXTENSION_NAME}.toggleEnabled`, async () => {
+    const config = vscode.workspace.getConfiguration(EXTENSION_NAME);
+    const enabled = config.get<boolean>("enabled", true);
+    await config.update(
+      "enabled",
+      !enabled,
+      vscode.ConfigurationTarget.Global
+    );
+
+    const controller = getController();
+    controller.updateConfig(load_config());
+    controller.renderStatusBar();
+    vscode.window.showInformationMessage(
+      `Lean Vacuum ${!enabled ? "enabled" : "disabled"}`
+    );
+  });
+  context.subscriptions.push(toggleEnabledCommand);
+
+  // Status bar item
+  context.subscriptions.push(controller.getStatusBarItem());
+
+
+  // Show consent form & Ask for participant name if not set.
+  if (!controller.nameNonempty()) {
+    showConsentUrl();
+    const name = await askForName();
+    const config = vscode.workspace.getConfiguration(EXTENSION_NAME);
+    await config.update(
+      "participantName",
+      name,
+      vscode.ConfigurationTarget.Global
+    );
+    controller.updateConfig(load_config());
+  }
 
   // Initial checkpoint update
-  for (let ws of workspace.workspaceFolders ?? []) {
-    let wsPath = ws.uri.fsPath;
-    let time = await timeit(async () => {
-      return updateConcreteCheckpoints(wsPath, config);
-    });
-    console.log(`[lean-vacuum] initial concrete checkpoint update in ${time}ms`);
+  if (controller.effectivelyEnabled()) {
+    for (let ws of workspace.workspaceFolders ?? []) {
+      let wsPath = ws.uri.fsPath;
+      let time = await timeit(async () => {
+        const participantName = controller.getConfig().participantName!;
+        return updateConcreteCheckpoints(wsPath, controller.getConfig(), participantName);
+      });
+      console.log(`[lean-vacuum] initial concrete checkpoint update in ${time}ms`);
+    }
   }
 
   // On change events
   const changeHook = workspace.onDidChangeTextDocument(async (e) => {
-    // Clear timers
-    if (updateCheckpointTimer) {
-      clearTimeout(updateCheckpointTimer);
-    }
-
     let wsPath = getWorkspacePath(e.document);
+    let controller = getController();
     if (wsPath === undefined) {
       return;
     }
-    setCheckpointTimer(wsPath);
-    setUploadTimer(wsPath);
-
-    console.log("[lean-vacuum] changed");
-    logChange(e, config);
+    if (!controller.effectivelyEnabled()) {
+      return;
+    }
+    controller.setCheckpointTimer(wsPath);
+    controller.setUploadTimer(wsPath);
+    const config = controller.getConfig();
     const time = await timeit(async () => {
-      return logChange(e, config);
+      const participantName = controller.getConfig().participantName!;
+      return logChange(e, config, participantName);
     });
-    console.log(`[lean-vacuum] logged change in ${time}ms`);
+    // console.log(`[lean-vacuum] logged change in ${time}ms`);
   });
   context.subscriptions.push(changeHook);
 
@@ -113,12 +256,30 @@ export async function activate(context: ExtensionContext) {
   // On configuration change events
   const configHook = workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration("lean-vacuum")) {
-      config = load_config();
+      const config = load_config();
+      getController().updateConfig(config);
     }
   });
   context.subscriptions.push(configHook);
-}
 
+  // Upload Command
+  const uploadCommand = vscode.commands.registerCommand(`${EXTENSION_NAME}.uploadChanges`, async () => {
+    let wsFolders = workspace.workspaceFolders;
+    if (!wsFolders || wsFolders.length === 0) {
+      vscode.window.showErrorMessage("No workspace folder found. Please open a folder in VSCode to upload changes.");
+      return;
+    }
+    for (let ws of wsFolders) {
+      let wsPath = ws.uri.fsPath;
+      const participantName = getController().getConfig().participantName!;
+      let [baseCommit, _] = getBaseCommit(wsPath, participantName);
+      let changesDir = getChangesDir(wsPath, baseCommit);
+      extensionLog(`sending upload request`);
+      await upload(changesDir);
+    }
+  });
+  context.subscriptions.push(uploadCommand);
+}
 
 export function deactivate(): void {
 

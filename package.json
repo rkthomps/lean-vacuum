@@ -20,6 +20,35 @@
   "extensionDependencies": [
     "vscode.git"
   ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lean-vacuum.showConsentUrl",
+        "title": "[Lean Vacuum]: Show Consent Form URL"
+      },
+      {
+        "command": "lean-vacuum.uploadChanges",
+        "title": "[Lean Vacuum]: Upload Changes"
+      }
+    ],
+    "configuration": {
+      "title": "Lean Vacuum",
+      "properties": {
+        "lean-vacuum.participantName": {
+          "title": "Participant Name",
+          "type": "string",
+          "description": "Name that you wrote on the consent form. Please complete the consent form if you haven't already."
+        },
+        "lean-vacuum.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "title": "Enable Lean Vacuum",
+          "description": "Enable or disable the Lean Vacuum extension globally."
+        }
+      }
+    }
+  },
   "main": "./out/extension.js",
   "scripts": {
     "vscode:prepublish": "npm run compile",
