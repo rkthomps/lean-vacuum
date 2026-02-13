@@ -1,4 +1,9 @@
 import vscode, { workspace } from "vscode";
+import { execSync } from "child_process";
+import assert from "assert";
+import os from "os";
+import path from "path";
+
 
 import {
   logChange,
@@ -8,11 +13,14 @@ import {
   getChangesDir
 } from "./tracking";
 
+import { ignoreChanges } from "./gitUtils";
+
 import { upload } from "./upload";
 
 import { VacuumConfig, load_config } from "./config";
 
 import { EXTENSION_NAME, CONSENT_URL, extensionLog } from "./common";
+import { readFileSync } from "fs";
 
 
 function createStatusBar(): vscode.StatusBarItem {
@@ -182,6 +190,8 @@ export async function activate(context: vscode.ExtensionContext) {
   });
   context.subscriptions.push(showConsentCommand);
 
+  // Ignore .changes directory in global gitignore
+  ignoreChanges();
 
   // Toggle enabled/disabled command 
   const toggleEnabledCommand = vscode.commands.registerCommand(`${EXTENSION_NAME}.toggleEnabled`, async () => {
